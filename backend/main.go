@@ -1,21 +1,27 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
-	"time"
 	"unicode"
 
 	"github.com/gin-gonic/gin"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+const uri = "mongodb://localhost:27017"
+
 type user struct {
-	Username string `json:"username"`
-	First_name string `json:"first_name"`
-	Last_name string `json:"last_name"`
-	Date_of_birth time.Time `json:"D.O.B"`
-	Email_address string `json:"email_address"`
-	Password string `json:"-"`
+    Username      string    `json:"username" bson:"username"`
+    FirstName     string    `json:"first_name" bson:"first_name"`
+    LastName      string    `json:"last_name" bson:"last_name"`
+    DateOfBirth   string	`json:"date_of_birth" bson:"date_of_birth"`
+    EmailAddress  string    `json:"email_address" bson:"email_address"`
+    Password      string    `json:"-" bson:"password"`
 }
 
 func (u user) MarshalJSON() ([]byte, error) {
@@ -23,55 +29,50 @@ func (u user) MarshalJSON() ([]byte, error) {
 		"username": "%s",
 		"first_name": "%s",
 		"last_name": "%s",
-		"D.O.B": "%s",
+		"date_of_birth": "%s",
 		"email_address": "%s"
-	}`, u.Username, u.First_name, u.Last_name, u.Date_of_birth.Format("02-Jan-2006"), u.Email_address)), nil
+	}`, u.Username, u.FirstName, u.LastName, u.DateOfBirth, u.EmailAddress)), nil
 }
 
-var logins = map[string]user{
-	"cblack51": {
-		Username: "cblack51",
-		First_name: "Cameron",
-		Last_name: "Black",
-		Date_of_birth: time.Date(1994, time.February, 8, 0, 0, 0, 0, time.UTC),
-		Email_address: "cameronblack51@hotmail.co.uk",
-		Password: "hunter2",
-	},
+func loginLogic(username string, password string, client *mongo.Client) (string, user, error) {
+	var result user
+	userColl := client.Database("gore").Collection("user")
+
+	err := userColl.FindOne(context.TODO(), bson.M{"username": username}).Decode(&result)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return "User not found.", user{}, err
+		}
+		return "Failed to fetch user.", result, err
+	}
+	if password != result.Password {
+		return "Password provided does not match.", user{}, fmt.Errorf("incorrect password")
+	}
+
+	return "Login successful.\n", result, nil
 }
 
-func loginLogic(username string, password string) (string, user, error) {
-	user, ok := logins[username]
-	if !ok {
-			return "", user, fmt.Errorf("user not found")
+func loginCall(client *mongo.Client) gin.HandlerFunc {
+	return func (c *gin.Context)  {
+		var credentials struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}
+
+		if err := c.BindJSON(&credentials); err != nil {
+			c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "Invalid request"})
+			return
+		}
+
+		message, user, error := loginLogic(credentials.Username, credentials.Password, client)
+		if error != nil {
+			c.IndentedJSON(http.StatusNotAcceptable, gin.H{"error": error, "user": user, "message": message})
+		} else {
+			currentUser = user
+			c.String(http.StatusOK, message)
+			c.IndentedJSON(http.StatusOK, gin.H{"userDetails": user})
+		}
 	}
-
-	if user.Password != password {
-			return "Incorrect password.", user, fmt.Errorf("incorrect password provided")
-	}
-
-	message := fmt.Sprintf("Login successful.\nWelcome, %v.\n", username)
-	return message, user, nil
-}
-
-func loginCall(c *gin.Context) {
-	var credentials struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-
-	if err := c.BindJSON(&credentials); err != nil {
-		c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "Invalid request"})
-		return
-	}
-
-	message, user, error := loginLogic(credentials.Username, credentials.Password)
-	if error != nil {
-		c.IndentedJSON(http.StatusNotAcceptable, gin.H{"message": error})
-	} else {
-		c.String(http.StatusOK, message)
-		c.IndentedJSON(http.StatusOK, gin.H{"userDetails": user})
-	}
-
 }
 
 func nameValidCheck(name string) bool {
@@ -102,12 +103,90 @@ func personalisedWelcome(c *gin.Context) {
 	}
 }
 
-func main() {
-	router := gin.Default()
+func connectMongoDB(uri string) (*mongo.Client, error) {
+	serverAPI := options.ServerAPI(options.ServerAPIVersion1)
+	opts := options.Client().ApplyURI(uri).SetServerAPIOptions(serverAPI)
 
+	client, err := mongo.Connect(context.TODO(), opts)
+	if err != nil {
+		return nil, err
+	}
+
+	var result bson.M
+	if err := client.Database("admin").RunCommand(context.TODO(), bson.D{{Key: "ping", Value: 1}}).Decode(&result); err != nil {
+		return nil, err
+	}
+	fmt.Println("Pinged your deployment. You successfully connected to MongoDB!")
+
+	return client, nil
+}
+
+var currentUser user
+
+func getUserList(client *mongo.Client) gin.HandlerFunc {
+	return func (c *gin.Context)  {
+		if currentUser.Username != "" {
+			userColl := client.Database("gore").Collection("user")
+
+			var users []bson.M
+			cursor, err := userColl.Find(context.TODO(), bson.D{})
+			if err != nil {
+				c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "Failed to fetch users."})
+				return
+			}
+			defer cursor.Close(context.TODO())
+
+			if err = cursor.All(context.TODO(), &users); err != nil {
+				c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "Failed to decode users"})
+				return
+			}
+
+			c.IndentedJSON(http.StatusFound, users)
+		} else {
+			c.IndentedJSON(http.StatusForbidden, gin.H{"message": "You are not logged in as a user with access to this resource."})
+		}
+	}
+}
+
+func registerNewUser(client *mongo.Client) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var newUser user
+		if err := c.BindJSON(&newUser); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+			return
+		}
+
+		coll := client.Database("gore").Collection("user")
+
+		res, err := coll.InsertOne(context.TODO(), newUser)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to insert user"})
+			return
+		}
+
+		c.IndentedJSON(http.StatusOK, gin.H{"inserted_id": res.InsertedID})
+	}
+}
+
+func main() {
+	client, err := connectMongoDB(uri)
+
+	if err != nil {
+		panic(err)
+	}
+	defer func() {
+		if err = client.Disconnect(context.TODO()); err != nil {
+			panic(err)
+		}
+	}()
+
+	
+	router := gin.Default()
 	router.GET("/", welcomeMessage)
 	router.GET("/:name", personalisedWelcome)
-	router.POST("/login", loginCall)
-	
+	router.POST("/login", loginCall(client))
+	router.GET("/db/users/list", getUserList(client))
+	router.POST("/db/users/register", registerNewUser(client))
+
 	router.Run("localhost:8080")
 }
