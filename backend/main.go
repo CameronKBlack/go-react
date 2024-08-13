@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"go-react/backend/models"
+	"go-react/backend/utils"
+	"io"
 	"net/http"
-	"unicode"
+	"reflect"
 
 	"github.com/gin-gonic/gin"
 
@@ -15,38 +19,21 @@ import (
 
 const uri = "mongodb://localhost:27017"
 
-type user struct {
-    Username      string    `json:"username" bson:"username"`
-    FirstName     string    `json:"first_name" bson:"first_name"`
-    LastName      string    `json:"last_name" bson:"last_name"`
-    DateOfBirth   string	`json:"date_of_birth" bson:"date_of_birth"`
-    EmailAddress  string    `json:"email_address" bson:"email_address"`
-    Password      string    `json:"-" bson:"password"`
-}
+var currentUser models.User
 
-func (u user) MarshalJSON() ([]byte, error) {
-	return []byte(fmt.Sprintf(`{
-		"username": "%s",
-		"first_name": "%s",
-		"last_name": "%s",
-		"date_of_birth": "%s",
-		"email_address": "%s"
-	}`, u.Username, u.FirstName, u.LastName, u.DateOfBirth, u.EmailAddress)), nil
-}
-
-func loginLogic(username string, password string, client *mongo.Client) (string, user, error) {
-	var result user
+func loginLogic(username string, password string, client *mongo.Client) (string, models.User, error) {
+	var result models.User
 	userColl := client.Database("gore").Collection("user")
 
 	err := userColl.FindOne(context.TODO(), bson.M{"username": username}).Decode(&result)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
-			return "User not found.", user{}, err
+			return "User not found.", models.User{}, err
 		}
 		return "Failed to fetch user.", result, err
 	}
 	if password != result.Password {
-		return "Password provided does not match.", user{}, fmt.Errorf("incorrect password")
+		return "Password provided does not match.", models.User{}, fmt.Errorf("incorrect password")
 	}
 
 	return "Login successful.\n", result, nil
@@ -64,25 +51,16 @@ func loginCall(client *mongo.Client) gin.HandlerFunc {
 			return
 		}
 
-		message, user, error := loginLogic(credentials.Username, credentials.Password, client)
+		message, u, error := loginLogic(credentials.Username, credentials.Password, client)
 		if error != nil {
-			c.IndentedJSON(http.StatusNotAcceptable, gin.H{"error": error, "user": user, "message": message})
+			c.IndentedJSON(http.StatusNotAcceptable, gin.H{"error": error, "user": u, "message": message})
 		} else {
-			currentUser = user
+			currentUser = u
+			userResponse := utils.ConvertUserFormat([]models.User{u})
 			c.String(http.StatusOK, message)
-			c.IndentedJSON(http.StatusOK, gin.H{"userDetails": user})
+			c.IndentedJSON(http.StatusOK, gin.H{"userDetails": userResponse})
 		}
 	}
-}
-
-func nameValidCheck(name string) bool {
-	for _, char := range name {
-		if !unicode.IsLetter(char) && !unicode.IsSpace(char) {
-			return false
-		}
-	}
-
-	return true
 }
 
 func welcomeMessage(c *gin.Context) {
@@ -93,7 +71,7 @@ func personalisedWelcome(c *gin.Context) {
 	name := c.Param("name")
 
 	switch {
-	case !nameValidCheck(name):
+	case !utils.NameValidCheck(name):
 		c.String(http.StatusNotAcceptable, "Sorry, you have provided an invalid name (make sure there are no numbers or special characters and try again) ¯\\_(ツ)_/¯")
 	case name == "Cameron":
 		c.String(http.StatusOK, "Of course I know him - he's me!")
@@ -121,8 +99,6 @@ func connectMongoDB(uri string) (*mongo.Client, error) {
 	return client, nil
 }
 
-var currentUser user
-
 func getUserList(client *mongo.Client) gin.HandlerFunc {
 	return func (c *gin.Context)  {
 		if currentUser.Username != "" {
@@ -140,8 +116,13 @@ func getUserList(client *mongo.Client) gin.HandlerFunc {
 				c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "Failed to decode users"})
 				return
 			}
-
-			c.IndentedJSON(http.StatusFound, users)
+			
+			userList, err := utils.ConvertFromBSONToUserSlice(users)
+			if err != nil {
+				c.IndentedJSON(http.StatusInternalServerError, gin.H{"message": "Failed to convert from BSON to user list"})
+			}
+			userRepsonses := utils.ConvertUserFormat(userList)
+			c.IndentedJSON(http.StatusFound, userRepsonses)
 		} else {
 			c.IndentedJSON(http.StatusForbidden, gin.H{"message": "You are not logged in as a user with access to this resource."})
 		}
@@ -150,27 +131,49 @@ func getUserList(client *mongo.Client) gin.HandlerFunc {
 
 func registerNewUser(client *mongo.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var newUser user
+        body, err := io.ReadAll(c.Request.Body)
+        if err != nil {
+            c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": "Failed to read request body"})
+            return
+        }
+
+		c.Request.Body = io.NopCloser(bytes.NewReader(body))
+
+		requiredFields := utils.GetRequiredFields(reflect.TypeOf(models.User{}))
+
+		if !utils.CheckRequiredFields(body, requiredFields) {
+			return
+		}
+		
+		var newUser models.User	
+
 		if err := c.BindJSON(&newUser); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+			c.IndentedJSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
 			return
 		}
 
 		coll := client.Database("gore").Collection("user")
 
-		res, err := coll.InsertOne(context.TODO(), newUser)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to insert user"})
-			return
+		if existingUser := coll.FindOne(context.TODO(), bson.M{"username": newUser.Username}); existingUser.Err() != nil {
+			if err == mongo.ErrNoDocuments {
+				res, err := coll.InsertOne(context.TODO(), newUser)
+				if err != nil {
+					c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": "Failed to insert user"})
+					return
+				}
+
+				c.IndentedJSON(http.StatusOK, gin.H{"inserted_id": res.InsertedID})
+			} else {
+				c.IndentedJSON(400, gin.H{"error": "An unexpected error occured.", "details": err})
+			}
 		}
 
-		c.IndentedJSON(http.StatusOK, gin.H{"inserted_id": res.InsertedID})
+		c.IndentedJSON(400, gin.H{"message": "A user with these details already exists on our system."})
 	}
 }
 
 func main() {
 	client, err := connectMongoDB(uri)
-
 	if err != nil {
 		panic(err)
 	}
