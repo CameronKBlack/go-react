@@ -89,50 +89,6 @@ func RegisterNewUsers(client *mongo.Client) gin.HandlerFunc {
 	}
 }
 
-func RegisterNewUser(client *mongo.Client) gin.HandlerFunc {
-	return func(c *gin.Context) {
-        body, err := io.ReadAll(c.Request.Body)
-        if err != nil {
-            c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": "Failed to read request body"})
-            return
-        }
-
-		c.Request.Body = io.NopCloser(bytes.NewReader(body))
-
-		requiredFields := utils.GetRequiredFields(reflect.TypeOf(models.User{}))
-
-		if !utils.CheckRequiredFields(body, requiredFields) {
-			return
-		}
-		
-		var newUser models.User	
-
-		if err := c.BindJSON(&newUser); err != nil {
-			c.IndentedJSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
-			return
-		}
-
-		coll := client.Database("gore").Collection("user")
-
-		var existingUser models.User
-		err = coll.FindOne(context.TODO(), bson.M{"username": newUser.Username}).Decode(&existingUser)
-	
-		if err == mongo.ErrNoDocuments {
-			newUser.Password = string(HashAndSalt(newUser.Password))
-			res, err := coll.InsertOne(context.TODO(), newUser)
-			if err != nil {
-				c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": "Failed to insert user"})
-				return
-			}
-			c.IndentedJSON(http.StatusOK, gin.H{"inserted_id": res.InsertedID})
-		} else if err != nil {
-			c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": "An unexpected error occurred.", "details": err.Error()})
-		} else {
-			c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "A user with these details already exists on our system."})
-		}
-	}
-}
-
 func LoginLogic(username string, password string, client *mongo.Client) (string, models.User, error) {
 	var result models.User
 	userColl := client.Database("gore").Collection("user")
