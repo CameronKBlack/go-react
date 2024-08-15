@@ -18,20 +18,29 @@ func NameValidCheck(name string) bool {
 }
 
 func CheckRequiredFields(rawJSON []byte, requiredFields []string) bool {
-    var requestBody map[string]interface{}
-    if err := json.Unmarshal(rawJSON, &requestBody); err != nil {
-        fmt.Println("Error unmarshalling JSON:", err)
-        return false
-    }
+    var users []map[string]interface{}
 
-    for _, field := range requiredFields {
-        if _, exists := requestBody[field]; !exists || requestBody[field] == "" {
-            fmt.Printf("Missing or empty required field: %s\n", field)
+    if err := json.Unmarshal(rawJSON, &users); err != nil {
+        var user map[string]interface{}
+        if err := json.Unmarshal(rawJSON, &user); err != nil {
+            fmt.Println("Error unmarshalling JSON:", err)
             return false
         }
+        users = append(users, user)
     }
+
+    for _, user := range users {
+        for _, field := range requiredFields {
+            if value, exists := user[field]; !exists || value == "" {
+                fmt.Printf("Missing or empty required field: %s\n", field)
+                return false
+            }
+        }
+    }
+
     return true
 }
+
 
 func GetRequiredFields(typ reflect.Type) []string {
 	var fields []string

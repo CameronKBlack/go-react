@@ -15,7 +15,7 @@ func RouterSetup(client *mongo.Client) {
 	router.GET("/", controllers.WelcomeMessage)
 	router.GET("/:name", controllers.PersonalisedWelcome)
 	router.POST("/login", controllers.LoginCall(client))
-	router.POST("/db/users/register", services.RegisterNewUser(client))
+	router.POST("/db/users/register", services.RegisterNewUsers(client))
 
 	authRoutes := router.Group("/")
 	authRoutes.Use(middlewares.UserMiddleware())
