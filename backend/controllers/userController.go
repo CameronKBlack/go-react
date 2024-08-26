@@ -29,8 +29,8 @@ func LoginCall(client *mongo.Client) gin.HandlerFunc {
 		if err != nil {
 			c.IndentedJSON(http.StatusNotAcceptable, gin.H{"error": err, "user": u, "message": message})
 			return
-		} 
-		
+		}
+
 		states.UserMutex.Lock()
 		states.CurrentUser = u
 		states.UserMutex.Unlock()
