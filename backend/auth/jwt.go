@@ -15,7 +15,7 @@ type CustomClaim struct {
 	jwt.RegisteredClaims
 }
 
-func generateJWT(username string, role string) (string, error) {
+func GenerateJWT(username string, role string) (string, error) {
 	claims := CustomClaim{username,
 		role,
 		jwt.RegisteredClaims{
@@ -33,7 +33,7 @@ func generateJWT(username string, role string) (string, error) {
 	return ss, nil
 }
 
-func validateJWT(tokenString string) (bool, string) {
+func ValidateJWT(tokenString string) (bool, string) {
 	token, err := jwt.ParseWithClaims(tokenString, &CustomClaim{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
