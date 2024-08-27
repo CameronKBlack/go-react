@@ -13,7 +13,7 @@ func JWTMiddleware() gin.HandlerFunc {
 		authHeader := c.GetHeader("Authorization")
 
 		if authHeader == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"message": "no authorization header found"})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"message": "you are not authorised to access this resource.", "detail": "no authorization header found"})
 			return
 		}
 		

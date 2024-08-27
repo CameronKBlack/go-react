@@ -25,6 +25,7 @@ func GenerateJWT(username string, role string) (string, error) {
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	token.Header["typ"] = "JWT"
 	ss, err := token.SignedString(config.SigningKey)
 	if err != nil {
 		return "An error has occured when creating JWT", err

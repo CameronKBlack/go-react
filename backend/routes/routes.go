@@ -18,7 +18,7 @@ func RouterSetup(client *mongo.Client) {
 	router.POST("/db/users/register", services.RegisterNewUsers(client))
 
 	authRoutes := router.Group("/")
-	authRoutes.Use(middlewares.UserMiddleware())
+	authRoutes.Use(middlewares.JWTMiddleware())
 	{
 		authRoutes.GET("/db/users/list", controllers.GetUserList(client))
 	}

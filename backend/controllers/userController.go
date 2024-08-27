@@ -2,9 +2,9 @@ package controllers
 
 import (
 	"context"
+	"go-react/backend/auth"
 	"go-react/backend/models"
 	"go-react/backend/services"
-	"go-react/backend/states"
 	"go-react/backend/utils"
 	"net/http"
 
@@ -21,20 +21,23 @@ func LoginCall(client *mongo.Client) gin.HandlerFunc {
 		}
 
 		if err := c.BindJSON(&credentials); err != nil {
-			c.IndentedJSON(http.StatusBadRequest, gin.H{"message": "Invalid request"})
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"message": "Invalid request"})
 			return
 		}
 
 		message, u, err := services.LoginLogic(credentials.Username, credentials.Password, client)
 		if err != nil {
-			c.IndentedJSON(http.StatusNotAcceptable, gin.H{"error": err, "user": u, "message": message})
+			c.AbortWithStatusJSON(http.StatusNotAcceptable, gin.H{"error": err, "user": u, "message": message})
 			return
 		}
 
-		states.UserMutex.Lock()
-		states.CurrentUser = u
-		states.UserMutex.Unlock()
 		userResponse := utils.ConvertUserFormat([]models.User{u})
+		jwt, err := auth.GenerateJWT(u.Username, string(u.Role))
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusNotAcceptable, gin.H{"message": "an error has occured", "detail": err})
+			return
+		}
+		c.Header("Authorization", "Bearer " + jwt)
 		c.String(http.StatusOK, message)
 		c.IndentedJSON(http.StatusOK, gin.H{"userDetails": userResponse})
 	}
